@@ -1,0 +1,18 @@
+model:
+  block_size: 1024
+  vocab_size: 151645
+  n_layer: 12
+  n_head: 12
+  n_embed: 768
+  dropout: 0.1
+  bias: True
+  ln_affine: True
+tokenizer_path: /mnt/f/Work_data/wsl2/data/processed_data/01.opennmt_chinese/tokenizer
+train:
+  batch: 12
+  epoch: 3
+  gradient_accumulation_steps: 40
+  lr_rate: 0.0006
+data:
+  train_path: /mnt/f/Work_data/wsl2/data/processed_data/01.opennmt_chinese/pt_train.bin
+  validate_path: /mnt/f/Work_data/wsl2/data/processed_data/01.opennmt_chinese/pt_validate.bin

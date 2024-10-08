@@ -1,0 +1,8 @@
+tokenizer_path: /mnt/f/Work_data/wsl2/data/processed_data/01.opennmt_chinese/tokenizer
+in_data_path: /mnt/f/Work_data/wsl2/data/processed_data/01.opennmt_chinese
+ou_data_path: /mnt/f/Work_data/wsl2/data/processed_data/01.opennmt_chinese
+max_length: 1024
+process_data:
+  train: True
+  validate: True
+  test: True

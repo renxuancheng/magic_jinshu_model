@@ -1,6 +1,6 @@
 model:
-  block_size: 1024
-  vocab_size: 151645
+  block_size: 128
+  vocab_size: 151646
   n_layer: 12
   n_head: 12
   n_embed: 768
@@ -11,8 +11,9 @@ tokenizer_path: /mnt/f/Work_data/wsl2/data/processed_data/01.opennmt_chinese/tok
 train:
   batch: 12
   epoch: 3
-  gradient_accumulation_steps: 40
+  gradient_accumulation_steps: 100
   lr_rate: 0.0006
 data:
   train_path: /mnt/f/Work_data/wsl2/data/processed_data/01.opennmt_chinese/pt_train.bin
   validate_path: /mnt/f/Work_data/wsl2/data/processed_data/01.opennmt_chinese/pt_validate.bin
+device: cuda

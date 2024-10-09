@@ -6,13 +6,16 @@ from torchinfo import summary
 import math
 
 
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+
 class MLP(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.up_layer = nn.Linear(config.n_embed, 4 * config.n_embed)
+        self.up_layer = nn.Linear(config["model"]["n_embed"], 4 * config["model"]["n_embed"])
         self.fc = nn.GELU()
-        self.down_layer = nn.Linear(4 * config.n_embed, config.n_embed)
-        self.mlp_dropout = nn.Dropout(config.dropout)
+        self.down_layer = nn.Linear(4 * config["model"]["n_embed"], config["model"]["n_embed"])
+        self.mlp_dropout = nn.Dropout(config["model"]["dropout"])
 
     def forward(self, x):
         x = self.up_layer(x)
@@ -26,18 +29,18 @@ class CausalSelfAttention(nn.Module):
     def __init__(self, config):
         super().__init__()
         # 输入维度[batch, sequence, embed]
-        assert config.n_embed % config.n_head == 0
-        self.n_embed = config.n_embed
-        self.n_head = config.n_head
+        assert config["model"]["n_embed"] % config["model"]["n_head"] == 0
+        self.n_embed = config["model"]["n_embed"]
+        self.n_head = config["model"]["n_head"]
         self.c_attn = nn.Linear(self.n_embed, 3 * self.n_embed)
         self.c_proj = nn.Linear(self.n_embed, self.n_embed)
-        self.attn_dropout = nn.Dropout(config.dropout)
-        self.resid_dropout = nn.Dropout(config.dropout)
+        self.attn_dropout = nn.Dropout(config["model"]["dropout"])
+        self.resid_dropout = nn.Dropout(config["model"]["dropout"])
         # mask
         self.register_buffer(
             "mask",
-            torch.tril(torch.ones(config.block_size, config.block_size)).view(
-                1, 1, config.block_size, config.block_size
+            torch.tril(torch.ones(config["model"]["block_size"], config["model"]["block_size"])).view(
+                1, 1, config["model"]["block_size"], config["model"]["block_size"]
             ),
         )
 
@@ -49,14 +52,18 @@ class CausalSelfAttention(nn.Module):
         q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)  # B n_head T hs
         k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
         v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
-        attn_weight = (q @ k.transpose(-2, -1)) * (
-            1.0 / math.sqrt(k.size(-1))
-        )  # B n_head T T (attn_weight)ij = qi * kj 对每行做softmax
+        attn = torch.nn.functional.scaled_dot_product_attention(
+            q, k, v, attn_mask=None, dropout_p=0.1, is_causal=True
+        )
 
-        attn_weight = attn_weight.masked_fill_(self.mask[:, :, :T, :T] == 0, float("-inf"))
-        attn_weight = F.softmax(attn_weight, dim=-1)
-        attn_weight = self.attn_dropout(attn_weight)
-        attn = attn_weight @ v  # B n_head T hs
+        # attn_weight = (q @ k.transpose(-2, -1)) * (
+        #     1.0 / math.sqrt(k.size(-1))
+        # )  # B n_head T T (attn_weight)ij = qi * kj 对每行做softmax
+
+        # attn_weight = attn_weight.masked_fill_(self.mask[:, :, :T, :T] == 0, float("-inf"))
+        # attn_weight = F.softmax(attn_weight, dim=-1)
+        # attn_weight = self.attn_dropout(attn_weight)
+        # attn = attn_weight @ v  # B n_head T hs
         attn = attn.transpose(1, 2).contiguous().view(B, T, C)
         attn = self.c_proj(attn)
         attn = self.resid_dropout(attn)
@@ -67,9 +74,13 @@ class CausalSelfAttention(nn.Module):
 class Block(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.layer_norm_1 = nn.LayerNorm(config.n_embed, elementwise_affine=config.ln_affine)
+        self.layer_norm_1 = nn.LayerNorm(
+            config["model"]["n_embed"], elementwise_affine=config["model"]["ln_affine"]
+        )
         self.attn = CausalSelfAttention(config)
-        self.layer_norm_2 = nn.LayerNorm(config.n_embed, elementwise_affine=config.ln_affine)
+        self.layer_norm_2 = nn.LayerNorm(
+            config["model"]["n_embed"], elementwise_affine=config["model"]["ln_affine"]
+        )
         self.mlp = MLP(config)
 
     def forward(self, x):
@@ -81,10 +92,36 @@ class Block(nn.Module):
 class GPT2Model(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.embedding = nn.Embedding()
+        self.wte = nn.Embedding(config["model"]["vocab_size"], config["model"]["n_embed"])
+        self.wpe = nn.Embedding(config["model"]["block_size"], config["model"]["n_embed"])
+        self.dropout = nn.Dropout(config["model"]["dropout"])
+        self.h = nn.ModuleList([Block(config) for _ in range(config["model"]["n_layer"])])
+        self.layer_norm = nn.LayerNorm(
+            config["model"]["n_embed"], elementwise_affine=config["model"]["ln_affine"]
+        )
+        self.lm_head = nn.Linear(config["model"]["n_embed"], config["model"]["vocab_size"], bias=False)
+        self.lm_head.weight = self.wte.weight
+        self.device = config["device"]
 
-    def forward(self, x):
-        pass
+    def forward(self, idx, ignore_index=-100, targets=None):
+        b, t = idx.size()
+        tok_emb = self.wte(idx)
+        pos = torch.arange(0, t, device=device)
+        pos_emb = self.wpe(pos)
+        x = self.dropout(tok_emb + pos_emb)
+        for block in self.h:
+            x = block(x)
+        x = self.layer_norm(x)
+        if targets is not None:
+            logits = self.lm_head(x)  # size b t n_vocab
+            targets = targets.long()
+            loss = F.cross_entropy(
+                logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=ignore_index
+            )
+        else:
+            logits = self.lm_head(x[:, -1, :])
+            loss = None
+        return logits, loss
 
 
 class GPTConfig:
@@ -99,6 +136,7 @@ class GPTConfig:
 
 
 if __name__ == "__main__":
+    pass
     gptconfig = GPTConfig()
-    gpt_block = Block(gptconfig)
-    print(summary(gpt_block))
+    gpt2_model = GPT2Model(gptconfig)
+    print(summary(gpt2_model))

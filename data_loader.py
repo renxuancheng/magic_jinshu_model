@@ -26,7 +26,7 @@ class JinshuDataset(Dataset):
         return self.arr_len[0]
 
     def __getitem__(self, index):
-        return torch.tensor(self.data_array[index,])
+        return self.data_array[index,]
 
 
 if __name__ == "__main__":
